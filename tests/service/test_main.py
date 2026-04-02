@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import zlib
+from contextlib import closing
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -17,7 +18,7 @@ _POISONING_LYRICS = "# Poisoning Pigeons\n\nI'm spending Hanukkah in Santa Monic
 
 def _make_songs_db(path: Path) -> None:
     """Write a minimal songs.db with two songs for testing."""
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn:
         conn.execute(
             """
             CREATE TABLE songs (
@@ -46,6 +47,7 @@ def _make_songs_db(path: Path) -> None:
                 zlib.compress(_POISONING_LYRICS.encode()),
             ),
         )
+        conn.commit()
 
 
 @pytest.fixture(autouse=True)
