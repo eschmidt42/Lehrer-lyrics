@@ -16,6 +16,7 @@ develop-eggs/
 lib/
 lib64/
 wheels/
+.ruff_cache
 
 # Virtual environments
 .env
@@ -65,3 +66,6 @@ htmlcov/
 *.swp
 *.swo
 .DS_Store
+
+# data
+song-urls.json
