@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import NamedTuple
+from urllib.parse import urlparse
 
+import ollama
 import typer
 from rich.console import Group
 from rich.live import Live
@@ -21,7 +24,8 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from lehrer_lyrics.scraper.fetcher import fetch_binary, fetch_page
+from lehrer_lyrics.scraper.converter import pdf_to_markdown as _convert_pdf
+from lehrer_lyrics.scraper.fetcher import _slug_from_url, fetch_binary, fetch_page
 from lehrer_lyrics.scraper.models import SongCatalog, SongEntry
 from lehrer_lyrics.scraper.parser import (
     extract_pdf_urls,
@@ -32,6 +36,13 @@ from lehrer_lyrics.scraper.parser import (
 BASE_URL = "https://tomlehrersongs.com"
 SONGS_URL = f"{BASE_URL}/songs/"
 _WINDOW_SIZE = 10
+
+
+class _LyricsTask(NamedTuple):
+    song_title: str
+    pdf_path: Path
+    md_stem: str  # filename stem for the output Markdown file (e.g. "alma")
+
 
 app = typer.Typer(help="Scrape Tom Lehrer song pages and collect PDF URLs.")
 
@@ -205,3 +216,153 @@ def download_pdfs(
             progress.advance(task_id)
 
     typer.echo(f"Downloaded {len(tasks)} PDF(s) to {cache_dir}")
+
+
+@app.command()
+def pdf_to_markdown(
+    input: Path = typer.Option(
+        Path("song-urls.json"),
+        help="JSON file produced by the 'scrape' command.",
+    ),
+    pdf_cache_dir: Path = typer.Option(
+        Path(".cache/pdf"),
+        help="Directory containing cached PDF files.",
+    ),
+    output_dir: Path = typer.Option(
+        Path(".cache/markdown"),
+        help="Directory for output Markdown files.",
+    ),
+    model: str = typer.Option(
+        "qwen3.5:27b",
+        help="Ollama model name to use for polishing lyrics.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Re-process PDFs even if a Markdown file already exists.",
+    ),
+    llm_timeout: float = typer.Option(
+        300.0,
+        help="Per-request timeout in seconds for the Ollama chat call.",
+        min=1.0,
+    ),
+    llm_max_retries: int = typer.Option(
+        3,
+        help="Total number of LLM call attempts (first try + retries) on RequestError.",
+        min=1,
+    ),
+    poll_interval: float = typer.Option(
+        5.0,
+        help="Seconds between readiness polls while waiting for Ollama to recover.",
+        min=0.1,
+    ),
+    ready_timeout: float = typer.Option(
+        120.0,
+        help="Maximum seconds to wait for Ollama to become responsive after a failure.",
+        min=1.0,
+    ),
+) -> None:
+    """Convert cached lyrics PDFs to polished Markdown using a local Ollama LLM."""
+    # --- Pre-flight checks ---
+    if not input.exists():
+        typer.echo(
+            f"Error: input file '{input}' not found. "
+            "Run the 'scrape' command first to generate it.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        available_models = [
+            m.model for m in ollama.list().models if m.model is not None
+        ]
+    except ollama.RequestError as exc:
+        typer.echo(f"Error: Ollama server is not reachable: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    if model not in available_models:
+        typer.echo(
+            f"Error: model '{model}' is not available in Ollama. "
+            f"Available models: {', '.join(list(available_models)) or '(none)'}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # --- Build task list (lyrics PDFs only) ---
+    data = SongCatalog.model_validate_json(input.read_text(encoding="utf-8"))
+    tasks: list[_LyricsTask] = []
+    for song_title, entry in data.root.items():
+        for label, url in entry.pdf_urls.items():
+            if "Lyrics" not in label:
+                continue
+            slug = _slug_from_url(url)
+            pdf_path = pdf_cache_dir / slug
+            md_stem = Path(urlparse(url).path).stem
+            tasks.append(_LyricsTask(song_title, pdf_path, md_stem))
+
+    if not tasks:
+        typer.echo("No lyrics PDFs found in the input file. Nothing to do.")
+        raise typer.Exit(code=0)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    progress = Progress(
+        TextColumn("[bold blue]Markdown"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    )
+    display = _LiveDisplay(progress)
+    task_id: TaskID = progress.add_task("converting", total=len(tasks))
+
+    converted = 0
+    skipped = 0
+
+    with Live(display, refresh_per_second=10):
+        for task in tasks:
+            display.set_current(task.song_title)
+
+            if not task.pdf_path.exists():
+                typer.echo(
+                    f"Warning: PDF not found in cache: {task.pdf_path} — skipping.",
+                    err=True,
+                )
+                progress.advance(task_id)
+                skipped += 1
+                continue
+
+            md_path = output_dir / (task.md_stem + ".md")
+
+            if md_path.exists() and not force:
+                progress.advance(task_id)
+                skipped += 1
+                display.mark_done(task.song_title)
+                continue
+
+            try:
+                markdown = _convert_pdf(
+                    task.pdf_path,
+                    model,
+                    timeout=llm_timeout,
+                    max_retries=llm_max_retries,
+                    poll_interval=poll_interval,
+                    ready_timeout=ready_timeout,
+                )
+            except (ollama.RequestError, ollama.ResponseError) as exc:
+                typer.echo(
+                    f"Warning: failed to convert '{task.song_title}': {exc} — skipping.",
+                    err=True,
+                )
+                progress.advance(task_id)
+                skipped += 1
+                continue
+            md_path.write_text(markdown, encoding="utf-8")
+            converted += 1
+
+            display.mark_done(task.song_title)
+            progress.advance(task_id)
+
+    typer.echo(
+        f"Converted {converted} PDF(s) to Markdown in {output_dir} ({skipped} skipped)."
+    )
