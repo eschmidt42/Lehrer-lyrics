@@ -63,3 +63,54 @@ def fetch_page(
 
     cache_file.write_text(html, encoding="utf-8")
     return html
+
+
+def fetch_binary(
+    url: str,
+    cache_dir: Path,
+    delay: float,
+    force: bool,
+    *,
+    _last_request_time: list[float] | None = None,
+) -> bytes:
+    """Fetch a binary file (e.g. PDF), using disk cache when available.
+
+    The cache filename is derived directly from the URL slug, which already
+    carries the file extension (e.g. ``alma.pdf``).
+
+    Args:
+        url: URL of the binary file to fetch.
+        cache_dir: Directory for cached files.
+        delay: Minimum seconds between live HTTP requests.
+        force: When True, ignore existing cache and re-fetch.
+        _last_request_time: Single-element list used to track the last request
+            timestamp across calls (pass the same list on every call).
+
+    Returns:
+        Raw binary content of the response.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    slug = _slug_from_url(url)
+    cache_file = cache_dir / slug  # slug already carries the file extension
+
+    if not force and cache_file.exists():
+        return cache_file.read_bytes()
+
+    # Enforce rate limit between live requests
+    if _last_request_time is not None and _last_request_time:
+        elapsed = time.monotonic() - _last_request_time[0]
+        if elapsed < delay:
+            time.sleep(delay - elapsed)
+
+    response = httpx.get(url, headers={"User-Agent": USER_AGENT}, follow_redirects=True)
+    response.raise_for_status()
+    content = response.content
+
+    if _last_request_time is not None:
+        if _last_request_time:
+            _last_request_time[0] = time.monotonic()
+        else:
+            _last_request_time.append(time.monotonic())
+
+    cache_file.write_bytes(content)
+    return content

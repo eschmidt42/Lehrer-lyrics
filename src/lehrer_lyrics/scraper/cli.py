@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
@@ -22,7 +21,8 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from lehrer_lyrics.scraper.fetcher import fetch_page
+from lehrer_lyrics.scraper.fetcher import fetch_binary, fetch_page
+from lehrer_lyrics.scraper.models import SongCatalog, SongEntry
 from lehrer_lyrics.scraper.parser import (
     extract_pdf_urls,
     extract_song_links,
@@ -108,7 +108,7 @@ def scrape(
         typer.echo("No song links found on the main page. Aborting.", err=True)
         raise typer.Exit(code=1)
 
-    results: dict[str, dict[str, str]] = {}
+    results = SongCatalog(root={})
 
     progress = Progress(
         TextColumn("[bold blue]Songs"),
@@ -130,13 +130,78 @@ def scrape(
 
             title = extract_song_title(song_html) or link_title
             pdf_urls = extract_pdf_urls(song_html, BASE_URL)
-            results[title] = {"site": song_url, **pdf_urls}
+            results.root[title] = SongEntry(site=song_url, **pdf_urls)
 
             display.mark_done(title)
             progress.advance(task_id)
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
+    output.write_text(results.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(f"Wrote {len(results.root)} entries to {output}")
+
+
+@app.command()
+def download_pdfs(
+    input: Path = typer.Option(
+        Path("song-urls.json"),
+        help="JSON file produced by the 'scrape' command.",
+    ),
+    cache_dir: Path = typer.Option(
+        Path(".cache/pdf"),
+        help="Directory for cached PDF files.",
+    ),
+    delay: float = typer.Option(
+        2.0,
+        help="Seconds to wait between HTTP requests.",
+        min=0.0,
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Re-download PDFs even if they are already cached.",
+    ),
+) -> None:
+    """Download all PDFs for every song listed in the scrape output JSON."""
+    if not input.exists():
+        typer.echo(
+            f"Error: input file '{input}' not found. "
+            "Run the 'scrape' command first to generate it.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    data = SongCatalog.model_validate_json(input.read_text(encoding="utf-8"))
+
+    # Flatten to (song_title, pdf_url) — skip the "site" field
+    tasks: list[tuple[str, str]] = [
+        (song_title, url)
+        for song_title, entry in data.root.items()
+        for url in entry.pdf_urls.values()
+    ]
+
+    if not tasks:
+        typer.echo("No PDF URLs found in the input file. Nothing to do.")
+        raise typer.Exit(code=0)
+
+    last_request_time: list[float] = []
+
+    progress = Progress(
+        TextColumn("[bold blue]PDFs"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
     )
-    typer.echo(f"Wrote {len(results)} entries to {output}")
+    display = _LiveDisplay(progress)
+    task_id: TaskID = progress.add_task("downloading", total=len(tasks))
+
+    with Live(display, refresh_per_second=10):
+        for song_title, pdf_url in tasks:
+            display.set_current(song_title)
+            fetch_binary(
+                pdf_url, cache_dir, delay, force, _last_request_time=last_request_time
+            )
+            display.mark_done(song_title)
+            progress.advance(task_id)
+
+    typer.echo(f"Downloaded {len(tasks)} PDF(s) to {cache_dir}")
