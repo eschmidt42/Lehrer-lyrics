@@ -66,3 +66,6 @@ htmlcov/
 *.swp
 *.swo
 .DS_Store
+
+# data
+song-urls.json
