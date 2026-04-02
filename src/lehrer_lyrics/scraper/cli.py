@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
@@ -23,6 +22,7 @@ from rich.table import Table
 from rich.text import Text
 
 from lehrer_lyrics.scraper.fetcher import fetch_binary, fetch_page
+from lehrer_lyrics.scraper.models import SongCatalog, SongEntry
 from lehrer_lyrics.scraper.parser import (
     extract_pdf_urls,
     extract_song_links,
@@ -108,7 +108,7 @@ def scrape(
         typer.echo("No song links found on the main page. Aborting.", err=True)
         raise typer.Exit(code=1)
 
-    results: dict[str, dict[str, str]] = {}
+    results = SongCatalog(root={})
 
     progress = Progress(
         TextColumn("[bold blue]Songs"),
@@ -130,16 +130,14 @@ def scrape(
 
             title = extract_song_title(song_html) or link_title
             pdf_urls = extract_pdf_urls(song_html, BASE_URL)
-            results[title] = {"site": song_url, **pdf_urls}
+            results.root[title] = SongEntry(site=song_url, **pdf_urls)
 
             display.mark_done(title)
             progress.advance(task_id)
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    typer.echo(f"Wrote {len(results)} entries to {output}")
+    output.write_text(results.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(f"Wrote {len(results.root)} entries to {output}")
 
 
 @app.command()
@@ -172,14 +170,13 @@ def download_pdfs(
         )
         raise typer.Exit(code=1)
 
-    data: dict[str, dict[str, str]] = json.loads(input.read_text(encoding="utf-8"))
+    data = SongCatalog.model_validate_json(input.read_text(encoding="utf-8"))
 
-    # Flatten to (song_title, pdf_url) — skip the "site" key
+    # Flatten to (song_title, pdf_url) — skip the "site" field
     tasks: list[tuple[str, str]] = [
         (song_title, url)
-        for song_title, urls in data.items()
-        for key, url in urls.items()
-        if key != "site"
+        for song_title, entry in data.root.items()
+        for url in entry.pdf_urls.values()
     ]
 
     if not tasks:
