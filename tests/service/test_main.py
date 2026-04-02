@@ -5,7 +5,9 @@ from lehrer_lyrics.service.main import app
 client = TestClient(app)
 
 
-def test_root_returns_hello_world():
+def test_root_returns_html_page():
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json() == {"message": "Hello World"}
+    assert response.headers["content-type"].startswith("text/html")
+    assert "A CHRISTMAS CAROL" in response.text
+    assert "Tom Lehrer" in response.text
