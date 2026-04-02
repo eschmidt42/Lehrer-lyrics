@@ -1,6 +1,9 @@
-# HTML Collector — `lehrer-scrape`
+# Scraper CLI — `lehrer-scrape`
 
-Dev-only CLI that scrapes [tomlehrersongs.com/songs](https://tomlehrersongs.com/songs/), caches HTML locally, and writes a JSON file mapping each song to its PDF URL(s).
+Dev-only CLI with two commands:
+
+- **`scrape`** — scrapes [tomlehrersongs.com/songs](https://tomlehrersongs.com/songs/), caches HTML locally, and writes a JSON file mapping each song to its PDF URL(s).
+- **`download-pdfs`** — downloads all PDFs listed in that JSON to a local cache.
 
 Source: `src/lehrer_lyrics/scraper/`
 
@@ -14,10 +17,12 @@ uv sync --group dev
 
 ---
 
-## CLI usage
+## Commands
+
+### `scrape`
 
 ```bash
-uv run lehrer-scrape [OPTIONS]
+uv run lehrer-scrape scrape [OPTIONS]
 ```
 
 | Option | Default | Description |
@@ -30,22 +35,51 @@ uv run lehrer-scrape [OPTIONS]
 **First run** — fetches all ~90 song pages live (~3 min at the default 2 s delay):
 
 ```bash
-uv run lehrer-scrape
+uv run lehrer-scrape scrape
 ```
 
 **Subsequent runs** — skips network requests for cached pages:
 
 ```bash
-uv run lehrer-scrape --output song-urls-fresh.json
+uv run lehrer-scrape scrape --output song-urls-fresh.json
 ```
 
 **Force re-fetch** all pages:
 
 ```bash
-uv run lehrer-scrape --force
+uv run lehrer-scrape scrape --force
 ```
 
-Progress is shown as a rolling window of the last 10 songs (spinner for the current page, ✓ for completed) with an overall progress bar showing N/total, elapsed time, and ETA.
+---
+
+### `download-pdfs`
+
+Reads the JSON produced by `scrape` and downloads every PDF to a local cache. Must be run after `scrape` (fails with a helpful message if the input file is missing).
+
+```bash
+uv run lehrer-scrape download-pdfs [OPTIONS]
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `--input PATH` | `song-urls.json` | JSON file produced by `scrape` |
+| `--cache-dir PATH` | `.cache/pdf` | Directory for cached PDF files |
+| `--delay FLOAT` | `2.0` | Seconds between live HTTP requests |
+| `--force` | off | Re-download even if already cached |
+
+**Download all PDFs** (reads `song-urls.json`):
+
+```bash
+uv run lehrer-scrape download-pdfs
+```
+
+**Force re-download**:
+
+```bash
+uv run lehrer-scrape download-pdfs --force
+```
+
+Progress is shown as a rolling window of the last 10 songs (spinner for the current download, ✓ for completed) with an overall progress bar showing N/total, elapsed time, and ETA.
 
 ---
 
@@ -69,11 +103,27 @@ Progress is shown as a rolling window of the last 10 songs (spinner for the curr
 - **`"site"`** — URL of the song's page on tomlehrersongs.com.
 - **Additional keys** — one per PDF link found on the song page. The key is the text immediately before the link (e.g. `"Lyrics"`, `"Revised version"`), with trailing colons and extra whitespace stripped.
 
+This structure is modelled by `SongEntry` / `SongCatalog` in `models.py` (see below).
+
 ---
 
 ## Module reference
 
-### `fetcher.py` — `fetch_page`
+### `models.py`
+
+#### `SongEntry`
+
+Pydantic `BaseModel` representing one song's URLs. `site` is the declared field; all additional fields (PDF label → URL) are captured via `extra="allow"` and exposed through the `pdf_urls` property.
+
+#### `SongCatalog`
+
+Pydantic `RootModel[dict[str, SongEntry]]` representing the full catalog. Deserialise with `SongCatalog.model_validate_json(...)` and serialise with `.model_dump_json(indent=2)`.
+
+---
+
+### `fetcher.py`
+
+#### `fetch_page`
 
 ```python
 fetch_page(url, cache_dir, delay, force, *, _last_request_time=None) -> str
@@ -85,6 +135,16 @@ Fetches a URL and returns the raw HTML, reading from disk cache when available.
 - Enforces `delay` seconds between live requests using the shared `_last_request_time` list (pass the same list on every call within a session).
 - Caches each page as `<cache_dir>/<slug>.html` where the slug is derived from the URL path.
 - When `force=True` the cache is bypassed and the file is overwritten after fetching.
+
+#### `fetch_binary`
+
+```python
+fetch_binary(url, cache_dir, delay, force, *, _last_request_time=None) -> bytes
+```
+
+Same rate-limiting and caching behaviour as `fetch_page`, but fetches binary content (e.g. PDFs). The cache filename is derived directly from the URL slug, which already carries the file extension (e.g. `alma.pdf`).
+
+---
 
 ### `parser.py`
 

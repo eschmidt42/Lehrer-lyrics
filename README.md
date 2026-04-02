@@ -19,8 +19,17 @@ A dev-only CLI that scrapes [tomlehrersongs.com/songs](https://tomlehrersongs.co
 
 ```bash
 uv sync --group dev
-uv run lehrer-scrape            # fetch all ~90 song pages (2 s delay between requests)
-uv run lehrer-scrape --force    # re-fetch even if cached
+uv run lehrer-scrape scrape           # fetch all ~90 song pages (2 s delay between requests)
+uv run lehrer-scrape scrape --force   # re-fetch even if cached
+```
+
+## PDF downloader
+
+Downloads all PDFs for every song listed in the JSON produced by the HTML collector.
+
+```bash
+uv run lehrer-scrape download-pdfs           # download all PDFs (reads song-urls.json)
+uv run lehrer-scrape download-pdfs --force   # re-download even if already cached
 ```
 
 See [docs/lehrer-scrape.md](./docs/lehrer-scrape.md) for full CLI and module documentation.
