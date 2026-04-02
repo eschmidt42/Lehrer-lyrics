@@ -13,23 +13,22 @@
 
 A project created with [FastAPI cloud](https://fastapicloud.com) CLI -> [docs](./docs/fastapi-cloud.md).
 
-## HTML collector
+## Scraper CLI
 
-A dev-only CLI that scrapes [tomlehrersongs.com/songs](https://tomlehrersongs.com/songs/), caches HTML locally, and writes a JSON file mapping each song to its PDF URL(s).
+A dev-only CLI (`lehrer-scrape`) with three commands that form a pipeline:
 
 ```bash
 uv sync --group dev
-uv run lehrer-scrape scrape           # fetch all ~90 song pages (2 s delay between requests)
-uv run lehrer-scrape scrape --force   # re-fetch even if cached
-```
 
-## PDF downloader
+# 1. Scrape song pages → song-urls.json
+uv run lehrer-scrape scrape
 
-Downloads all PDFs for every song listed in the JSON produced by the HTML collector.
+# 2. Download PDFs → .cache/pdf/
+uv run lehrer-scrape download-pdfs
 
-```bash
-uv run lehrer-scrape download-pdfs           # download all PDFs (reads song-urls.json)
-uv run lehrer-scrape download-pdfs --force   # re-download even if already cached
+# 3. Convert lyrics PDFs to Markdown → .cache/markdown/  (requires Ollama)
+uv run lehrer-scrape pdf-to-markdown                     # local Ollama
+uv run lehrer-scrape pdf-to-markdown --cloud             # Ollama cloud (prompts for API key)
 ```
 
 See [docs/lehrer-scrape.md](./docs/lehrer-scrape.md) for full CLI and module documentation.
