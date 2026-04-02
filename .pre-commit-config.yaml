@@ -1,0 +1,51 @@
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0  # Use the ref you want to point at
+  hooks:
+  - id: trailing-whitespace
+  - id: check-added-large-files
+    args: ['--maxkb=1500']
+  - id: check-case-conflict
+  - id: check-executables-have-shebangs
+  - id: check-merge-conflict
+  - id: check-toml
+  - id: detect-private-key
+  - id: end-of-file-fixer
+  - id: name-tests-test
+    args: ['--pytest-test-first']
+- repo: https://github.com/kynan/nbstripout
+  rev: 0.8.1
+  hooks:
+  - id: nbstripout
+    args:
+      [
+        "--extra-keys",
+        "metadata.interpreter metadata.kernelspec cell.metadata.pycharm",
+      ]
+- repo: local
+  hooks:
+  - id: ruff-check
+    name: linting
+    entry: uv run ruff check --select "I,F401" --fix
+    pass_filenames: false
+    language: system
+    types_or: [python, pyi]
+  - id: ruff-format
+    name: formatting
+    entry: uv run ruff format --force-exclude
+    pass_filenames: false
+    language: system
+    types_or: [python, pyi]
+  - id: ty
+    name: type check
+    entry: uv run ty check src/ tests/
+    pass_filenames: false
+    language: system
+    types_or: [python, pyi]
+  - id: test
+    name: test
+    entry: uv run pytest -n auto tests
+    pass_filenames: false
+    require_serial: true
+    language: system
+    types_or: [python, pyi]
