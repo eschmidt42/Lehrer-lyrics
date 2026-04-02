@@ -59,8 +59,9 @@ def patch_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     svc._all_songs.cache_clear()
     svc._render_page.cache_clear()
     yield
-    svc._all_songs.cache_clear()
     svc._render_page.cache_clear()
+    if hasattr(svc._all_songs, "cache_clear"):
+        svc._all_songs.cache_clear()
 
 
 @pytest.fixture()
@@ -96,24 +97,45 @@ def test_root_contains_a_song_title(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_root_contains_site_url_link_when_available(client: TestClient) -> None:
+def test_root_contains_site_url_link_when_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the selected song has a site_url, the page must contain a link to it."""
     import lehrer_lyrics.service.main as svc
 
-    fixed_date = date(2026, 1, 1)
-    # Ensure the daily song is Alma (which has a site_url)
-    with patch.object(svc, "_today_berlin", return_value=fixed_date):
-        import random
+    # Override _all_songs to return only a song that has a site_url
+    alma_only = [
+        (
+            "Alma",
+            "https://tomlehrersongs.com/alma/",
+            zlib.compress(_ALMA_LYRICS.encode()),
+        )
+    ]
+    monkeypatch.setattr(svc, "_all_songs", lambda: alma_only)
+    svc._render_page.cache_clear()
 
-        random.seed(fixed_date.isoformat())
-        songs = svc._all_songs()
-        chosen_title = random.choice(songs)[0]
+    from lehrer_lyrics.service.main import app
 
-    if chosen_title == "Alma":
-        response = client.get("/")
-        with patch.object(svc, "_today_berlin", return_value=fixed_date):
-            response = client.get("/")
-        assert "tomlehrersongs.com" in response.text
-        assert "<a href=" in response.text
+    response = TestClient(app).get("/")
+    assert "tomlehrersongs.com" in response.text
+    assert '<a href="https://tomlehrersongs.com/alma/"' in response.text
+
+
+def test_root_no_link_when_site_url_is_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the selected song has no site_url, no link should appear in the footer."""
+    import lehrer_lyrics.service.main as svc
+
+    no_url = [("Mystery Song", None, zlib.compress(b"# Mystery\n\nsome lyrics"))]
+    monkeypatch.setattr(svc, "_all_songs", lambda: no_url)
+    svc._render_page.cache_clear()
+
+    from lehrer_lyrics.service.main import app
+
+    response = TestClient(app).get("/")
+    assert "tomlehrersongs.com" not in response.text
+    assert "By Tom Lehrer" in response.text
 
 
 # ---------------------------------------------------------------------------

@@ -42,10 +42,13 @@ def _today_berlin() -> date:
 @lru_cache(maxsize=None)
 def _all_songs() -> list[tuple[str, str | None, bytes]]:
     """Load all songs from songs.db once; returns (title, site_url, lyrics_gz) tuples."""
-    with sqlite3.connect(_DB_PATH) as conn:
+    conn = sqlite3.connect(_DB_PATH)
+    try:
         rows = conn.execute(
             "SELECT title, site_url, lyrics_gz FROM songs ORDER BY slug"
         ).fetchall()
+    finally:
+        conn.close()
     return [(title, site_url, bytes(lyrics_gz)) for title, site_url, lyrics_gz in rows]
 
 
