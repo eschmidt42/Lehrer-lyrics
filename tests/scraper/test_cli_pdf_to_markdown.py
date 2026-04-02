@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from lehrer_lyrics.scraper.cli import app
@@ -24,7 +25,7 @@ SONG_DATA = {
     },
 }
 
-_DEFAULT_MODEL = "qwen3.5:27b"
+_DEFAULT_MODEL = "ministral-3:14b"
 
 
 def _make_ollama_list(models: list[str]):
@@ -177,7 +178,7 @@ def test_skips_existing_markdown(tmp_path: Path) -> None:
 
     convert_calls: list[str] = []
 
-    def fake_convert(pdf_path: Path, model: str) -> str:
+    def fake_convert(pdf_path: Path, model: str, **kwargs: object) -> str:
         convert_calls.append(pdf_path.name)
         return "# Alma\n\nNew lyrics.\n"
 
@@ -282,6 +283,8 @@ def test_warns_when_pdf_not_in_cache(tmp_path: Path) -> None:
                 str(input_file),
                 "--pdf-cache-dir",
                 str(pdf_cache),
+                "--output-dir",
+                str(tmp_path / "markdown"),
             ],
         )
 
@@ -324,6 +327,8 @@ def test_converter_request_error_warns_and_skips(tmp_path: Path) -> None:
                 str(input_file),
                 "--pdf-cache-dir",
                 str(pdf_cache),
+                "--output-dir",
+                str(tmp_path / "markdown"),
             ],
         )
 
@@ -361,9 +366,327 @@ def test_converter_response_error_warns_and_skips(tmp_path: Path) -> None:
                 str(input_file),
                 "--pdf-cache-dir",
                 str(pdf_cache),
+                "--output-dir",
+                str(tmp_path / "markdown"),
             ],
         )
 
     assert result.exit_code == 0
     assert "failed to convert" in result.output
     assert "1 skipped" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Music / score / addenda filename filtering
+# ---------------------------------------------------------------------------
+
+_FILTERED_SUFFIXES = [
+    "-music.pdf",
+    "-score.pdf",
+    "-final.pdf",
+    "score-p.1.pdf",
+    "score-p.2.pdf",
+    "-addenda.pdf",
+]
+
+
+def test_music_and_score_files_are_skipped(tmp_path: Path) -> None:
+    """PDFs whose names end with known non-lyrics suffixes must be silently skipped."""
+    # Build a catalog with one song that has both a lyrics and several filtered PDFs
+    song_data = {
+        "Alma": {
+            "site": "https://tomlehrersongs.com/alma/",
+            "Lyrics": "https://tomlehrersongs.com/wp-content/uploads/2018/11/alma.pdf",
+            "Sheet music": "https://tomlehrersongs.com/wp-content/uploads/2019/03/alma-music.pdf",
+        }
+    }
+    input_file = tmp_path / "song-urls.json"
+    input_file.write_text(json.dumps(song_data), encoding="utf-8")
+
+    pdf_cache = tmp_path / "pdf"
+    pdf_cache.mkdir()
+    output_dir = tmp_path / "markdown"
+    (pdf_cache / "wp-content_uploads_2018_11_alma.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    convert_calls: list[str] = []
+
+    def recording_convert(pdf_path: Path, model: str, **kwargs: object) -> str:
+        convert_calls.append(pdf_path.name)
+        return "# Alma\n\nLyrics.\n"
+
+    with (
+        patch(
+            "lehrer_lyrics.scraper.cli.ollama.list",
+            return_value=_make_ollama_list([_DEFAULT_MODEL]),
+        ),
+        patch("lehrer_lyrics.scraper.cli._convert_pdf", side_effect=recording_convert),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "pdf-to-markdown",
+                "--input",
+                str(input_file),
+                "--pdf-cache-dir",
+                str(pdf_cache),
+                "--output-dir",
+                str(output_dir),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    # Sheet music URL ends in -music.pdf but it is also NOT a "Lyrics" label,
+    # so it wouldn't be in the task list at all — the test verifies the lyrics PDF
+    # is processed and the music PDF is simply absent from convert_calls.
+    assert len(convert_calls) == 1
+    assert convert_calls[0] == "wp-content_uploads_2018_11_alma.pdf"
+
+
+@pytest.mark.parametrize("suffix", _FILTERED_SUFFIXES)
+def test_filtered_suffix_is_not_converted(suffix: str, tmp_path: Path) -> None:
+    """A lyrics-labelled PDF whose name ends with a filtered suffix is skipped."""
+    filename = f"wp-content_uploads_2018_11_alma{suffix}"
+    url = f"https://tomlehrersongs.com/wp-content/uploads/2018/11/alma{suffix}"
+    song_data = {
+        "Alma": {
+            "site": "https://tomlehrersongs.com/alma/",
+            "Lyrics": url,
+        }
+    }
+    input_file = tmp_path / "song-urls.json"
+    input_file.write_text(json.dumps(song_data), encoding="utf-8")
+
+    pdf_cache = tmp_path / "pdf"
+    pdf_cache.mkdir()
+    (pdf_cache / filename).write_bytes(b"%PDF-1.4 fake")
+
+    with (
+        patch(
+            "lehrer_lyrics.scraper.cli.ollama.list",
+            return_value=_make_ollama_list([_DEFAULT_MODEL]),
+        ),
+        patch("lehrer_lyrics.scraper.cli._convert_pdf") as mock_convert,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "pdf-to-markdown",
+                "--input",
+                str(input_file),
+                "--pdf-cache-dir",
+                str(pdf_cache),
+                "--output-dir",
+                str(tmp_path / "markdown"),
+            ],
+        )
+
+    mock_convert.assert_not_called()
+    assert result.exit_code == 0, result.output
+    assert "1 skipped" in result.output
+
+
+# ---------------------------------------------------------------------------
+# ReadTimeout is handled like RequestError
+# ---------------------------------------------------------------------------
+
+
+def test_read_timeout_warns_and_skips(tmp_path: Path) -> None:
+    from httpx import ReadTimeout
+
+    input_file = tmp_path / "song-urls.json"
+    input_file.write_text(json.dumps({"Alma": SONG_DATA["Alma"]}), encoding="utf-8")
+
+    pdf_cache = tmp_path / "pdf"
+    pdf_cache.mkdir()
+    (pdf_cache / "wp-content_uploads_2018_11_alma.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    with (
+        patch(
+            "lehrer_lyrics.scraper.cli.ollama.list",
+            return_value=_make_ollama_list([_DEFAULT_MODEL]),
+        ),
+        patch(
+            "lehrer_lyrics.scraper.cli._convert_pdf",
+            side_effect=ReadTimeout("timed out"),
+        ),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "pdf-to-markdown",
+                "--input",
+                str(input_file),
+                "--pdf-cache-dir",
+                str(pdf_cache),
+                "--output-dir",
+                str(tmp_path / "markdown"),
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "failed to convert" in result.output
+    assert "1 skipped" in result.output
+
+
+def _make_cloud_client_mock(models: list[str]) -> MagicMock:
+    """Return a mock that behaves like an ollama.Client for cloud pre-flight."""
+    mock_client = MagicMock()
+    mock_client.list.return_value = _make_ollama_list(models)
+    return mock_client
+
+
+def test_cloud_prompts_for_api_key_and_succeeds(tmp_path: Path) -> None:
+    input_file = tmp_path / "song-urls.json"
+    input_file.write_text(json.dumps({"Alma": SONG_DATA["Alma"]}), encoding="utf-8")
+
+    pdf_cache = tmp_path / "pdf"
+    pdf_cache.mkdir()
+    (pdf_cache / "wp-content_uploads_2018_11_alma.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    mock_cloud_client = _make_cloud_client_mock([_DEFAULT_MODEL])
+
+    with (
+        patch(
+            "lehrer_lyrics.scraper.cli.ollama.Client",
+            return_value=mock_cloud_client,
+        ),
+        patch(
+            "lehrer_lyrics.scraper.cli._convert_pdf",
+            return_value="# Alma\n\nCloud lyrics.\n",
+        ),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "pdf-to-markdown",
+                "--input",
+                str(input_file),
+                "--pdf-cache-dir",
+                str(pdf_cache),
+                "--output-dir",
+                str(tmp_path / "markdown"),
+                "--model",
+                _DEFAULT_MODEL,
+                "--cloud",
+            ],
+            input="my-secret-api-key\n",
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "1 PDF(s)" in result.output
+
+
+def test_cloud_request_error_exits_with_error(tmp_path: Path) -> None:
+    import ollama
+
+    input_file = tmp_path / "song-urls.json"
+    input_file.write_text(json.dumps(SONG_DATA), encoding="utf-8")
+
+    mock_cloud_client = MagicMock()
+    mock_cloud_client.list.side_effect = ollama.RequestError("network failure")
+
+    with patch(
+        "lehrer_lyrics.scraper.cli.ollama.Client", return_value=mock_cloud_client
+    ):
+        result = runner.invoke(
+            app,
+            ["pdf-to-markdown", "--input", str(input_file), "--cloud"],
+            input="bad-key\n",
+        )
+
+    assert result.exit_code == 1
+    assert "cloud API" in result.output
+    assert "not reachable" in result.output
+
+
+def test_cloud_response_error_exits_with_api_key_hint(tmp_path: Path) -> None:
+    import ollama
+
+    input_file = tmp_path / "song-urls.json"
+    input_file.write_text(json.dumps(SONG_DATA), encoding="utf-8")
+
+    mock_cloud_client = MagicMock()
+    mock_cloud_client.list.side_effect = ollama.ResponseError("401 Unauthorized")
+
+    with patch(
+        "lehrer_lyrics.scraper.cli.ollama.Client", return_value=mock_cloud_client
+    ):
+        result = runner.invoke(
+            app,
+            ["pdf-to-markdown", "--input", str(input_file), "--cloud"],
+            input="wrong-key\n",
+        )
+
+    assert result.exit_code == 1
+    assert "API key" in result.output
+
+
+def test_cloud_model_not_available_exits_with_error(tmp_path: Path) -> None:
+    input_file = tmp_path / "song-urls.json"
+    input_file.write_text(json.dumps(SONG_DATA), encoding="utf-8")
+
+    mock_cloud_client = _make_cloud_client_mock(["other-model:7b"])
+
+    with patch(
+        "lehrer_lyrics.scraper.cli.ollama.Client", return_value=mock_cloud_client
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "pdf-to-markdown",
+                "--input",
+                str(input_file),
+                "--model",
+                _DEFAULT_MODEL,
+                "--cloud",
+            ],
+            input="my-key\n",
+        )
+
+    assert result.exit_code == 1
+    assert _DEFAULT_MODEL in result.output
+    assert "not available" in result.output
+
+
+def test_cloud_host_and_headers_forwarded_to_converter(tmp_path: Path) -> None:
+    """_convert_pdf must receive host=_CLOUD_HOST and the Bearer headers."""
+    from lehrer_lyrics.scraper.cli import _CLOUD_HOST
+
+    input_file = tmp_path / "song-urls.json"
+    input_file.write_text(json.dumps({"Alma": SONG_DATA["Alma"]}), encoding="utf-8")
+
+    pdf_cache = tmp_path / "pdf"
+    pdf_cache.mkdir()
+    (pdf_cache / "wp-content_uploads_2018_11_alma.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    mock_cloud_client = _make_cloud_client_mock([_DEFAULT_MODEL])
+    convert_calls: list[dict] = []
+
+    def recording_convert(pdf_path, model, **kwargs):  # type: ignore[no-untyped-def]
+        convert_calls.append(kwargs)
+        return "# Alma\n\nLyrics.\n"
+
+    with (
+        patch(
+            "lehrer_lyrics.scraper.cli.ollama.Client", return_value=mock_cloud_client
+        ),
+        patch("lehrer_lyrics.scraper.cli._convert_pdf", side_effect=recording_convert),
+    ):
+        runner.invoke(
+            app,
+            [
+                "pdf-to-markdown",
+                "--input",
+                str(input_file),
+                "--pdf-cache-dir",
+                str(pdf_cache),
+                "--output-dir",
+                str(tmp_path / "markdown"),
+                "--cloud",
+            ],
+            input="secret\n",
+        )
+
+    assert len(convert_calls) == 1
+    assert convert_calls[0]["host"] == _CLOUD_HOST
+    assert convert_calls[0]["headers"] == {"Authorization": "Bearer secret"}

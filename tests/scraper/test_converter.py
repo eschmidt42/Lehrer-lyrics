@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import ollama
@@ -9,9 +10,65 @@ import pytest
 
 from lehrer_lyrics.scraper.converter import (
     LLM_MAX_RETRIES,
+    build_messages,
+    extract_text_from_pdf,
     polish_lyrics_with_llm,
     wait_for_ollama_ready,
 )
+
+# ---------------------------------------------------------------------------
+# build_messages
+# ---------------------------------------------------------------------------
+
+
+def test_build_messages_returns_single_user_message() -> None:
+    messages = build_messages("Some lyrics here.")
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+
+
+def test_build_messages_embeds_raw_text_in_content() -> None:
+    raw = "NATIONAL BROTHERHOOD WEEK\nwords and music by Tom Lehrer\n"
+    messages = build_messages(raw)
+    assert raw in messages[0]["content"]
+
+
+def test_build_messages_includes_formatting_instructions() -> None:
+    messages = build_messages("some text")
+    content = messages[0]["content"]
+    assert "Markdown" in content
+    assert (
+        "stanza" in content.lower()
+        or "verse" in content.lower()
+        or "group" in content.lower()
+    )
+
+
+# ---------------------------------------------------------------------------
+# extract_text_from_pdf — line stripping
+# ---------------------------------------------------------------------------
+
+
+def test_extract_text_from_pdf_strips_line_whitespace(tmp_path: Path) -> None:
+    """Lines extracted from each page must have surrounding whitespace stripped."""
+    import pypdf
+
+    # Build a minimal mock PdfReader whose single page returns padded lines
+    mock_page = MagicMock()
+    mock_page.extract_text.return_value = "  Title Line  \n  Second Line  "
+
+    mock_reader = MagicMock(spec=pypdf.PdfReader)
+    mock_reader.pages = [mock_page]
+
+    with patch(
+        "lehrer_lyrics.scraper.converter.pypdf.PdfReader", return_value=mock_reader
+    ):
+        result = extract_text_from_pdf(tmp_path / "fake.pdf")
+
+    assert "  Title Line  " not in result
+    assert "Title Line" in result
+    assert "Second Line" in result
+
 
 # ---------------------------------------------------------------------------
 # wait_for_ollama_ready
@@ -19,21 +76,24 @@ from lehrer_lyrics.scraper.converter import (
 
 
 def test_wait_for_ollama_ready_returns_immediately_when_server_up() -> None:
-    with patch("lehrer_lyrics.scraper.converter.ollama.list") as mock_list:
+    mock_client = MagicMock()
+    with patch(
+        "lehrer_lyrics.scraper.converter.ollama.Client", return_value=mock_client
+    ):
         wait_for_ollama_ready(poll_interval=0.0, ready_timeout=5.0)
-    mock_list.assert_called_once()
+    mock_client.list.assert_called_once()
 
 
 def test_wait_for_ollama_ready_retries_until_server_recovers() -> None:
-    responses = [
+    mock_client = MagicMock()
+    mock_client.list.side_effect = [
         ollama.RequestError("down"),
         ollama.RequestError("down"),
         MagicMock(),  # success on third attempt
     ]
     with (
         patch(
-            "lehrer_lyrics.scraper.converter.ollama.list",
-            side_effect=responses,
+            "lehrer_lyrics.scraper.converter.ollama.Client", return_value=mock_client
         ),
         patch("lehrer_lyrics.scraper.converter.time.sleep") as mock_sleep,
     ):
@@ -43,10 +103,11 @@ def test_wait_for_ollama_ready_retries_until_server_recovers() -> None:
 
 
 def test_wait_for_ollama_ready_raises_after_timeout() -> None:
+    mock_client = MagicMock()
+    mock_client.list.side_effect = ollama.RequestError("always down")
     with (
         patch(
-            "lehrer_lyrics.scraper.converter.ollama.list",
-            side_effect=ollama.RequestError("always down"),
+            "lehrer_lyrics.scraper.converter.ollama.Client", return_value=mock_client
         ),
         patch("lehrer_lyrics.scraper.converter.time.sleep"),
         patch(
@@ -56,6 +117,23 @@ def test_wait_for_ollama_ready_raises_after_timeout() -> None:
     ):
         with pytest.raises(ollama.RequestError):
             wait_for_ollama_ready(poll_interval=1.0, ready_timeout=5.0)
+
+
+def test_wait_for_ollama_ready_uses_host_and_headers() -> None:
+    """The client must be created with the supplied host and headers."""
+    mock_client = MagicMock()
+    with patch(
+        "lehrer_lyrics.scraper.converter.ollama.Client", return_value=mock_client
+    ) as MockClient:
+        wait_for_ollama_ready(
+            poll_interval=0.0,
+            ready_timeout=5.0,
+            host="https://ollama.com",
+            headers={"Authorization": "Bearer key"},
+        )
+    MockClient.assert_called_once_with(
+        host="https://ollama.com", headers={"Authorization": "Bearer key"}
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import ollama
 import typer
+from httpx import ReadTimeout
 from rich.console import Group
 from rich.live import Live
 from rich.progress import (
@@ -36,6 +37,7 @@ from lehrer_lyrics.scraper.parser import (
 BASE_URL = "https://tomlehrersongs.com"
 SONGS_URL = f"{BASE_URL}/songs/"
 _WINDOW_SIZE = 10
+_CLOUD_HOST = "https://ollama.com"
 
 
 class _LyricsTask(NamedTuple):
@@ -233,7 +235,7 @@ def pdf_to_markdown(
         help="Directory for output Markdown files.",
     ),
     model: str = typer.Option(
-        "qwen3.5:27b",
+        "ministral-3:14b",
         help="Ollama model name to use for polishing lyrics.",
     ),
     force: bool = typer.Option(
@@ -242,7 +244,7 @@ def pdf_to_markdown(
         help="Re-process PDFs even if a Markdown file already exists.",
     ),
     llm_timeout: float = typer.Option(
-        300.0,
+        60.0,
         help="Per-request timeout in seconds for the Ollama chat call.",
         min=1.0,
     ),
@@ -261,9 +263,23 @@ def pdf_to_markdown(
         help="Maximum seconds to wait for Ollama to become responsive after a failure.",
         min=1.0,
     ),
+    cloud: bool = typer.Option(
+        False,
+        "--cloud",
+        help="Use the Ollama cloud API instead of a local server. "
+        "You will be prompted for an API key.",
+    ),
 ) -> None:
-    """Convert cached lyrics PDFs to polished Markdown using a local Ollama LLM."""
-    # --- Pre-flight checks ---
+    """Convert cached lyrics PDFs to polished Markdown using a local or cloud Ollama LLM."""
+    # --- Cloud setup: prompt for API key securely ---
+    ollama_host: str | None = None
+    ollama_headers: dict[str, str] | None = None
+    if cloud:
+        api_key = typer.prompt("Ollama Cloud API key", hide_input=True)
+        ollama_host = _CLOUD_HOST
+        ollama_headers = {"Authorization": f"Bearer {api_key}"}
+
+    # --- Pre-flight: input file ---
     if not input.exists():
         typer.echo(
             f"Error: input file '{input}' not found. "
@@ -272,17 +288,38 @@ def pdf_to_markdown(
         )
         raise typer.Exit(code=1)
 
-    try:
-        available_models = [
-            m.model for m in ollama.list().models if m.model is not None
-        ]
-    except ollama.RequestError as exc:
-        typer.echo(f"Error: Ollama server is not reachable: {exc}", err=True)
-        raise typer.Exit(code=1)
+    # --- Pre-flight: Ollama connectivity + model availability ---
+    if cloud:
+        cloud_client = ollama.Client(host=_CLOUD_HOST, headers=ollama_headers)
+        try:
+            available_models = sorted(
+                [m.model for m in cloud_client.list().models if m.model is not None]
+            )
+        except ollama.RequestError as exc:
+            typer.echo(
+                f"Error: Ollama cloud API ({_CLOUD_HOST}) is not reachable: {exc}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        except ollama.ResponseError as exc:
+            typer.echo(
+                f"Error: Ollama cloud API returned an error "
+                f"(check your API key): {exc}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        try:
+            available_models = sorted(
+                [m.model for m in ollama.list().models if m.model is not None]
+            )
+        except ollama.RequestError as exc:
+            typer.echo(f"Error: Ollama server is not reachable: {exc}", err=True)
+            raise typer.Exit(code=1)
 
     if model not in available_models:
         typer.echo(
-            f"Error: model '{model}' is not available in Ollama. "
+            f"Error: model '{model}' is not available. "
             f"Available models: {', '.join(list(available_models)) or '(none)'}",
             err=True,
         )
@@ -340,6 +377,19 @@ def pdf_to_markdown(
                 display.mark_done(task.song_title)
                 continue
 
+            if (
+                task.pdf_path.name.endswith("-music.pdf")
+                or task.pdf_path.name.endswith("-score.pdf")
+                or task.pdf_path.name.endswith("-final.pdf")
+                or task.pdf_path.name.endswith("score-p.1.pdf")
+                or task.pdf_path.name.endswith("score-p.2.pdf")
+                or task.pdf_path.name.endswith("-addenda.pdf")
+            ):
+                progress.advance(task_id)
+                skipped += 1
+                display.mark_done(task.song_title)
+                continue
+
             try:
                 markdown = _convert_pdf(
                     task.pdf_path,
@@ -348,8 +398,10 @@ def pdf_to_markdown(
                     max_retries=llm_max_retries,
                     poll_interval=poll_interval,
                     ready_timeout=ready_timeout,
+                    host=ollama_host,
+                    headers=ollama_headers,
                 )
-            except (ollama.RequestError, ollama.ResponseError) as exc:
+            except (ollama.RequestError, ollama.ResponseError, ReadTimeout) as exc:
                 typer.echo(
                     f"Warning: failed to convert '{task.song_title}': {exc} — skipping.",
                     err=True,
