@@ -22,7 +22,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from lehrer_lyrics.scraper.fetcher import fetch_page
+from lehrer_lyrics.scraper.fetcher import fetch_binary, fetch_page
 from lehrer_lyrics.scraper.parser import (
     extract_pdf_urls,
     extract_song_links,
@@ -140,3 +140,71 @@ def scrape(
         json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     typer.echo(f"Wrote {len(results)} entries to {output}")
+
+
+@app.command()
+def download_pdfs(
+    input: Path = typer.Option(
+        Path("song-urls.json"),
+        help="JSON file produced by the 'scrape' command.",
+    ),
+    cache_dir: Path = typer.Option(
+        Path(".cache/pdf"),
+        help="Directory for cached PDF files.",
+    ),
+    delay: float = typer.Option(
+        2.0,
+        help="Seconds to wait between HTTP requests.",
+        min=0.0,
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Re-download PDFs even if they are already cached.",
+    ),
+) -> None:
+    """Download all PDFs for every song listed in the scrape output JSON."""
+    if not input.exists():
+        typer.echo(
+            f"Error: input file '{input}' not found. "
+            "Run the 'scrape' command first to generate it.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    data: dict[str, dict[str, str]] = json.loads(input.read_text(encoding="utf-8"))
+
+    # Flatten to (song_title, pdf_url) — skip the "site" key
+    tasks: list[tuple[str, str]] = [
+        (song_title, url)
+        for song_title, urls in data.items()
+        for key, url in urls.items()
+        if key != "site"
+    ]
+
+    if not tasks:
+        typer.echo("No PDF URLs found in the input file. Nothing to do.")
+        raise typer.Exit(code=0)
+
+    last_request_time: list[float] = []
+
+    progress = Progress(
+        TextColumn("[bold blue]PDFs"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    )
+    display = _LiveDisplay(progress)
+    task_id: TaskID = progress.add_task("downloading", total=len(tasks))
+
+    with Live(display, refresh_per_second=10):
+        for song_title, pdf_url in tasks:
+            display.set_current(song_title)
+            fetch_binary(
+                pdf_url, cache_dir, delay, force, _last_request_time=last_request_time
+            )
+            display.mark_done(song_title)
+            progress.advance(task_id)
+
+    typer.echo(f"Downloaded {len(tasks)} PDF(s) to {cache_dir}")
