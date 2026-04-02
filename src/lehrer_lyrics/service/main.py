@@ -3,6 +3,7 @@ from pathlib import Path
 import markdown
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fasthtml.common import (
     Body,
     Footer,
@@ -16,11 +17,13 @@ from fasthtml.common import (
     to_xml,
 )
 
-_SONGS_DIR = Path(__file__).parent / "songs"
+_SERVICE_DIR = Path(__file__).parent
+_SONGS_DIR = _SERVICE_DIR / "songs"
 _PICO_CSS = Link(
     rel="stylesheet",
     href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css",
 )
+_LOCAL_CSS = Link(rel="stylesheet", href="/static/style.css")
 
 
 def _render_song(path: Path) -> str:
@@ -37,20 +40,19 @@ _PAGE = to_xml(
             Meta(charset="utf-8"),
             Meta(name="viewport", content="width=device-width, initial-scale=1"),
             _PICO_CSS,
+            _LOCAL_CSS,
             Title("A Christmas Carol — Tom Lehrer"),
         ),
         Body(
             Main(
                 NotStr(_CHRISTMAS_CAROL_HTML),
                 cls="container",
-                style="max-width:48rem;margin:4rem auto;text-align:center;",
             ),
             Footer(
                 NotStr(
                     "By Tom Lehrer &mdash; <em>Going from adolescence to senility, trying to bypass maturity</em>"
                 ),
                 cls="container",
-                style="max-width:48rem;margin:2rem auto;text-align:center;font-size:.85rem;color:var(--pico-muted-color);",
             ),
         ),
         lang="en",
@@ -58,6 +60,7 @@ _PAGE = to_xml(
 )
 
 app = FastAPI()
+app.mount("/static", StaticFiles(directory=_SERVICE_DIR), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
