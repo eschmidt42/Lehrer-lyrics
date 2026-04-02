@@ -16,6 +16,7 @@ develop-eggs/
 lib/
 lib64/
 wheels/
+.ruff_cache
 
 # Virtual environments
 .env
