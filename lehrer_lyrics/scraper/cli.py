@@ -496,11 +496,12 @@ def build_db(
         raise typer.Exit(code=1)
 
     output.parent.mkdir(parents=True, exist_ok=True)
+    output.unlink(missing_ok=True)  # start fresh — no stale rows or old schema
     conn = sqlite3.connect(output)
     try:
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS songs (
+            CREATE TABLE songs (
                 title     TEXT NOT NULL,
                 slug      TEXT PRIMARY KEY,
                 site_url  TEXT,
@@ -517,7 +518,7 @@ def build_db(
                 md_path.read_text(encoding="utf-8").encode("utf-8"), level=9
             )
             conn.execute(
-                "INSERT OR REPLACE INTO songs (title, slug, site_url, lyrics_gz)"
+                "INSERT INTO songs (title, slug, site_url, lyrics_gz)"
                 " VALUES (?, ?, ?, ?)",
                 (title, md_slug, site_url, lyrics_gz),
             )

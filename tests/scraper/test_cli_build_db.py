@@ -149,7 +149,7 @@ def test_build_db_song_count(
     tmp_path: Path, markdown_dir: Path, songs_json: Path
 ) -> None:
     output = tmp_path / "songs.db"
-    runner.invoke(
+    result = runner.invoke(
         app,
         [
             "build-db",
@@ -161,6 +161,7 @@ def test_build_db_song_count(
             str(output),
         ],
     )
+    assert result.exit_code == 0, result.output
 
     with sqlite3.connect(output) as conn:
         count = conn.execute("SELECT COUNT(*) FROM songs").fetchone()[0]
@@ -171,7 +172,7 @@ def test_build_db_site_url_attached(
     tmp_path: Path, markdown_dir: Path, songs_json: Path
 ) -> None:
     output = tmp_path / "songs.db"
-    runner.invoke(
+    result = runner.invoke(
         app,
         [
             "build-db",
@@ -183,6 +184,7 @@ def test_build_db_site_url_attached(
             str(output),
         ],
     )
+    assert result.exit_code == 0, result.output
 
     with sqlite3.connect(output) as conn:
         row = conn.execute("SELECT site_url FROM songs WHERE slug = 'alma'").fetchone()
@@ -195,7 +197,7 @@ def test_build_db_prefix_match_attaches_url(
 ) -> None:
     """'the-elements.md' should match the verbose JSON title via prefix matching."""
     output = tmp_path / "songs.db"
-    runner.invoke(
+    result = runner.invoke(
         app,
         [
             "build-db",
@@ -207,6 +209,7 @@ def test_build_db_prefix_match_attaches_url(
             str(output),
         ],
     )
+    assert result.exit_code == 0, result.output
 
     with sqlite3.connect(output) as conn:
         row = conn.execute(
@@ -220,7 +223,7 @@ def test_build_db_unmatched_song_has_null_url(
     tmp_path: Path, markdown_dir: Path, songs_json: Path
 ) -> None:
     output = tmp_path / "songs.db"
-    runner.invoke(
+    result = runner.invoke(
         app,
         [
             "build-db",
@@ -232,6 +235,7 @@ def test_build_db_unmatched_song_has_null_url(
             str(output),
         ],
     )
+    assert result.exit_code == 0, result.output
 
     with sqlite3.connect(output) as conn:
         row = conn.execute(
@@ -245,7 +249,7 @@ def test_build_db_lyrics_stored_compressed(
     tmp_path: Path, markdown_dir: Path, songs_json: Path
 ) -> None:
     output = tmp_path / "songs.db"
-    runner.invoke(
+    result = runner.invoke(
         app,
         [
             "build-db",
@@ -257,6 +261,7 @@ def test_build_db_lyrics_stored_compressed(
             str(output),
         ],
     )
+    assert result.exit_code == 0, result.output
 
     with sqlite3.connect(output) as conn:
         row = conn.execute("SELECT lyrics_gz FROM songs WHERE slug = 'alma'").fetchone()
@@ -268,7 +273,7 @@ def test_build_db_lyrics_stored_compressed(
 def test_build_db_is_idempotent(
     tmp_path: Path, markdown_dir: Path, songs_json: Path
 ) -> None:
-    """Running build-db twice should not raise and should yield the same row count."""
+    """Running build-db twice rebuilds from scratch and yields the same row count."""
     output = tmp_path / "songs.db"
     args = [
         "build-db",
@@ -279,10 +284,11 @@ def test_build_db_is_idempotent(
         "--output",
         str(output),
     ]
-    runner.invoke(app, args)
+    first = runner.invoke(app, args)
+    assert first.exit_code == 0, first.output
     result = runner.invoke(app, args)
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     with sqlite3.connect(output) as conn:
         count = conn.execute("SELECT COUNT(*) FROM songs").fetchone()[0]
     assert count == 4
@@ -313,7 +319,7 @@ def test_build_db_unmatched_song_title_derived_from_slug(
     tmp_path: Path, markdown_dir: Path, songs_json: Path
 ) -> None:
     output = tmp_path / "songs.db"
-    runner.invoke(
+    result = runner.invoke(
         app,
         [
             "build-db",
@@ -325,6 +331,7 @@ def test_build_db_unmatched_song_title_derived_from_slug(
             str(output),
         ],
     )
+    assert result.exit_code == 0, result.output
 
     with sqlite3.connect(output) as conn:
         row = conn.execute(

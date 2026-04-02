@@ -60,11 +60,20 @@ def _render_page(today: date) -> str:
     When the date rolls over the cache naturally misses and recomputes.
     """
     songs = _all_songs()
-    random.seed(today.isoformat())
-    title, site_url, lyrics_gz = random.choice(songs)
-    lyrics_html = markdown.markdown(
-        zlib.decompress(lyrics_gz).decode("utf-8"), extensions=["nl2br"]
-    )
+    if songs:
+        rng = random.Random(today.isoformat())
+        title, site_url, lyrics_gz = rng.choice(songs)
+        lyrics_html = markdown.markdown(
+            zlib.decompress(lyrics_gz).decode("utf-8"), extensions=["nl2br"]
+        )
+    else:
+        title = "A Christmas Carol"
+        site_url = "https://tomlehrersongs.com/a-christmas-carol/"
+        path = _SERVICE_DIR / "songs" / "a-christmas-carol.md"
+        lyrics_html = markdown.markdown(
+            path.read_text(encoding="utf-8"), extensions=["nl2br"]
+        )
+
     footer_inner = (
         f'By Tom Lehrer &mdash; <a href="{site_url}">tomlehrersongs.com</a>'
         if site_url
