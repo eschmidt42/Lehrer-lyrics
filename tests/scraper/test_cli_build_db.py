@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import zlib
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -163,7 +164,7 @@ def test_build_db_song_count(
     )
     assert result.exit_code == 0, result.output
 
-    with sqlite3.connect(output) as conn:
+    with closing(sqlite3.connect(output)) as conn:
         count = conn.execute("SELECT COUNT(*) FROM songs").fetchone()[0]
     assert count == 4
 
@@ -186,7 +187,7 @@ def test_build_db_site_url_attached(
     )
     assert result.exit_code == 0, result.output
 
-    with sqlite3.connect(output) as conn:
+    with closing(sqlite3.connect(output)) as conn:
         row = conn.execute("SELECT site_url FROM songs WHERE slug = 'alma'").fetchone()
     assert row is not None
     assert row[0] == "https://tomlehrersongs.com/alma/"
@@ -211,7 +212,7 @@ def test_build_db_prefix_match_attaches_url(
     )
     assert result.exit_code == 0, result.output
 
-    with sqlite3.connect(output) as conn:
+    with closing(sqlite3.connect(output)) as conn:
         row = conn.execute(
             "SELECT site_url FROM songs WHERE slug = 'the-elements'"
         ).fetchone()
@@ -237,7 +238,7 @@ def test_build_db_unmatched_song_has_null_url(
     )
     assert result.exit_code == 0, result.output
 
-    with sqlite3.connect(output) as conn:
+    with closing(sqlite3.connect(output)) as conn:
         row = conn.execute(
             "SELECT site_url FROM songs WHERE slug = 'unknown-song'"
         ).fetchone()
@@ -263,7 +264,7 @@ def test_build_db_lyrics_stored_compressed(
     )
     assert result.exit_code == 0, result.output
 
-    with sqlite3.connect(output) as conn:
+    with closing(sqlite3.connect(output)) as conn:
         row = conn.execute("SELECT lyrics_gz FROM songs WHERE slug = 'alma'").fetchone()
     assert row is not None
     decompressed = zlib.decompress(row[0]).decode("utf-8")
@@ -289,7 +290,7 @@ def test_build_db_is_idempotent(
     result = runner.invoke(app, args)
 
     assert result.exit_code == 0, result.output
-    with sqlite3.connect(output) as conn:
+    with closing(sqlite3.connect(output)) as conn:
         count = conn.execute("SELECT COUNT(*) FROM songs").fetchone()[0]
     assert count == 4
 
@@ -333,7 +334,7 @@ def test_build_db_unmatched_song_title_derived_from_slug(
     )
     assert result.exit_code == 0, result.output
 
-    with sqlite3.connect(output) as conn:
+    with closing(sqlite3.connect(output)) as conn:
         row = conn.execute(
             "SELECT title FROM songs WHERE slug = 'unknown-song'"
         ).fetchone()

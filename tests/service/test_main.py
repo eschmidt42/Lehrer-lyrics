@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import zlib
+from contextlib import closing
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -17,7 +18,7 @@ _POISONING_LYRICS = "# Poisoning Pigeons\n\nI'm spending Hanukkah in Santa Monic
 
 def _make_songs_db(path: Path) -> None:
     """Write a minimal songs.db with two songs for testing."""
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn:
         conn.execute(
             """
             CREATE TABLE songs (
@@ -46,6 +47,7 @@ def _make_songs_db(path: Path) -> None:
                 zlib.compress(_POISONING_LYRICS.encode()),
             ),
         )
+        conn.commit()
 
 
 @pytest.fixture(autouse=True)
@@ -174,3 +176,26 @@ def test_different_dates_may_return_different_songs() -> None:
                 results.add("pigeons")
     # With 2 songs over 28 days both should appear
     assert len(results) == 2
+
+
+# ---------------------------------------------------------------------------
+# Empty songs database — fallback to built-in Christmas Carol
+# ---------------------------------------------------------------------------
+
+
+def test_empty_songs_db_falls_back_to_christmas_carol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When _all_songs() returns no rows the service must fall back to the
+    built-in a-christmas-carol.md file and still return a valid HTML page."""
+    import lehrer_lyrics.service.main as svc
+
+    monkeypatch.setattr(svc, "_all_songs", lambda: [])
+    svc._render_page.cache_clear()
+
+    from lehrer_lyrics.service.main import app
+
+    response = TestClient(app).get("/")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Tom Lehrer" in response.text

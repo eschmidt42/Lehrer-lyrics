@@ -15,7 +15,7 @@ A project created with [FastAPI cloud](https://fastapicloud.com) CLI -> [docs](.
 
 ## Scraper CLI
 
-A dev-only CLI (`lehrer-scrape`) with three commands that form a pipeline:
+A dev-only CLI (`lehrer-scrape`) with four commands that form a pipeline:
 
 ```bash
 uv sync --group dev
@@ -29,6 +29,21 @@ uv run lehrer-scrape download-pdfs
 # 3. Convert lyrics PDFs to Markdown → .cache/markdown/  (requires Ollama)
 uv run lehrer-scrape pdf-to-markdown                     # local Ollama
 uv run lehrer-scrape pdf-to-markdown --cloud             # Ollama cloud (prompts for API key)
+
+# 4. Build SQLite database → lehrer_lyrics/service/songs.db  (commit to repo)
+uv run lehrer-scrape build-db
 ```
 
 See [docs/lehrer-scrape.md](./docs/lehrer-scrape.md) for full CLI and module documentation.
+
+## Service
+
+A FastAPI app (`lehrer_lyrics/service/main.py`) that serves one Tom Lehrer song per day.
+
+**How it works:**
+
+- On startup, all songs are loaded once from `lehrer_lyrics/service/songs.db` (a SQLite database built by `lehrer-scrape build-db`) and cached in memory.
+- Each request to `GET /` picks today's song by seeding Python's `random.Random` with the current date in the Europe/Berlin timezone — everyone sees the same song all day, and it changes deterministically at midnight Berlin time.
+- Lyrics are stored as zlib-compressed Markdown blobs in the database. They are decompressed and rendered to HTML (with `nl2br` for line-break preservation) on the first request of each day, then cached.
+- If the database is empty the service falls back to a bundled "A Christmas Carol" file.
+- Static assets (CSS) are served from `/static`.

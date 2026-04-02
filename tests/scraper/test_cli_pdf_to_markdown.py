@@ -690,3 +690,44 @@ def test_cloud_host_and_headers_forwarded_to_converter(tmp_path: Path) -> None:
     assert len(convert_calls) == 1
     assert convert_calls[0]["host"] == _CLOUD_HOST
     assert convert_calls[0]["headers"] == {"Authorization": "Bearer secret"}
+
+
+# ---------------------------------------------------------------------------
+# No lyrics PDFs in input file
+# ---------------------------------------------------------------------------
+
+
+def test_no_lyrics_pdfs_exits_cleanly(tmp_path: Path) -> None:
+    """When the input file has no entries with 'Lyrics' labels the command
+    should print 'Nothing to do' and exit 0."""
+    # Provide only a sheet-music PDF (no 'Lyrics' key)
+    input_file = tmp_path / "song-urls.json"
+    input_file.write_text(
+        json.dumps(
+            {
+                "Alma": {
+                    "site": "https://tomlehrersongs.com/alma/",
+                    "Sheet music": "https://tomlehrersongs.com/wp-content/uploads/alma-music.pdf",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with patch(
+        "lehrer_lyrics.scraper.cli.ollama.list",
+        return_value=_make_ollama_list([_DEFAULT_MODEL]),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "pdf-to-markdown",
+                "--input",
+                str(input_file),
+                "--model",
+                _DEFAULT_MODEL,
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "Nothing to do" in result.output
