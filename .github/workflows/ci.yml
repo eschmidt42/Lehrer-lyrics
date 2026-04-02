@@ -1,0 +1,70 @@
+# https://docs.astral.sh/uv/guides/integration/github/#setting-up-python
+name: CI
+
+on:
+  push:
+
+
+jobs:
+
+  uv-example:
+    name: python
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version:
+          - "3.13.10"
+
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.10.10"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Security audit (pip-audit)
+        run: |
+          # Run pip-audit as an isolated tool (not a project dependency).
+          # We export a fully-resolved requirements file from the uv lock so
+          # pip-audit can audit the project's dependencies.
+          uv export --format requirements-txt --all-extras --dev -o requirements-ci.txt > /dev/null
+          # uv export includes the local project as an editable install (-e .),
+          # which isn't hashable. We only want to audit resolved dependencies.
+          grep -v '^-e \.$' requirements-ci.txt > requirements-ci-audit.txt
+          uv tool run pip-audit -r requirements-ci-audit.txt
+          #  --disable-pip \
+          #  --ignore-vuln CVE-2026-4539 \
+          #  --ignore-vuln CVE-2025-69872
+
+      - name: Install the project
+        run: uv sync --all-extras --dev
+
+      - name: Dead code check (vulture)
+        run: |
+          # Vulture reports unused variables too, but we only want to fail on
+          # unused functions/classes (dead code with runtime impact).
+          uv run vulture src --min-confidence 90 > vulture.txt || true
+          matches="$(grep -nE "unused (function|class)" vulture.txt || true)"
+          if [ -n "$matches" ]; then
+            printf "\nVulture found unused functions/classes:\n\n%s\n" "$matches"
+            printf "\nFull vulture output:\n"
+            cat vulture.txt
+            exit 1
+          fi
+
+      - name: Run tests (with coverage)
+        run: |
+          uv run pytest tests --cov --cov-branch --cov-report=xml
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: eschmidt42/lehrer-lyrics
