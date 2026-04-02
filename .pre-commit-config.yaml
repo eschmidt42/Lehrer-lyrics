@@ -38,7 +38,7 @@ repos:
     types_or: [python, pyi]
   - id: ty
     name: type check
-    entry: uv run ty check src/ tests/
+    entry: uv run ty check lehrer_lyrics/ tests/
     pass_filenames: false
     language: system
     types_or: [python, pyi]

@@ -50,7 +50,7 @@ jobs:
         run: |
           # Vulture reports unused variables too, but we only want to fail on
           # unused functions/classes (dead code with runtime impact).
-          uv run vulture src --min-confidence 90 > vulture.txt || true
+          uv run vulture lehrer_lyrics --min-confidence 90 > vulture.txt || true
           matches="$(grep -nE "unused (function|class)" vulture.txt || true)"
           if [ -n "$matches" ]; then
             printf "\nVulture found unused functions/classes:\n\n%s\n" "$matches"
