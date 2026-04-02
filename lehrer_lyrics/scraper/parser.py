@@ -82,13 +82,13 @@ def extract_pdf_urls(html: str, base_url: str) -> dict[str, str]:
         if not href.lower().endswith(".pdf"):
             continue
 
-        # Collect preceding text nodes within the same parent element
+        # Collect preceding text nodes within the same parent element.
+        # In BeautifulSoup every sibling is either a Tag or NavigableString,
+        # both of which expose get_text().
         label_parts: list[str] = []
         for sibling in a.previous_siblings:
             if hasattr(sibling, "get_text"):
                 label_parts.append(sibling.get_text())
-            elif isinstance(sibling, str):
-                label_parts.append(sibling)
 
         raw_label = "".join(reversed(label_parts))
         label = _clean_label(raw_label)

@@ -156,3 +156,88 @@ class TestExtractSongTitle:
 
     def test_returns_none_when_not_found(self):
         assert extract_song_title("<html><body></body></html>") is None
+
+
+# Additional edge-case fixtures
+SONG_PAGE_NO_SECTION_HTML = """\
+<html><body>
+<main id="main">
+  <p>No section tag here.</p>
+</main>
+</body></html>
+"""
+
+# Anchor with no preceding text siblings — fallback to anchor's own text
+SONG_PAGE_ANCHOR_LABEL_HTML = """\
+<html><body>
+<main id="main">
+  <section id="content">
+    <a href="/wp-content/uploads/song-b.pdf">Download Lyrics PDF</a>
+  </section>
+</main>
+</body></html>
+"""
+
+# Raw text node immediately before the anchor (not wrapped in a tag)
+SONG_PAGE_RAW_TEXT_SIBLING_HTML = """\
+<html><body>
+<main id="main">
+  <section id="content">
+    Sheet Music: <a href="/wp-content/uploads/song-c.pdf">view PDF</a>
+  </section>
+</main>
+</body></html>
+"""
+
+# Link with no text content — should be skipped
+MAIN_PAGE_EMPTY_TITLE_HTML = """\
+<html><body>
+<main id="main">
+  <section id="content">
+    <a href="/real-song/">Real Song</a>
+    <a href="/empty-title/"></a>
+  </section>
+</main>
+</body></html>
+"""
+
+# Anchor link that does NOT end in .pdf — should be skipped
+SONG_PAGE_NON_PDF_LINK_HTML = """\
+<html><body>
+<main id="main">
+  <section id="content">
+    <p>Listen: <a href="/stream/song.mp3">stream here</a></p>
+    <p>Lyrics: <a href="/wp-content/uploads/real.pdf">view PDF</a></p>
+  </section>
+</main>
+</body></html>
+"""
+
+
+class TestExtractSongLinksEdgeCases:
+    def test_skips_links_with_empty_title(self):
+        links = extract_song_links(MAIN_PAGE_EMPTY_TITLE_HTML, BASE)
+        titles = [t for t, _ in links]
+        assert "Real Song" in titles
+        # The empty-title anchor must not produce an entry
+        assert all(t for t in titles)
+
+
+class TestExtractPdfUrlsEdgeCases:
+    def test_missing_section_returns_empty(self):
+        assert extract_pdf_urls(SONG_PAGE_NO_SECTION_HTML, BASE) == {}
+
+    def test_skips_non_pdf_links(self):
+        result = extract_pdf_urls(SONG_PAGE_NON_PDF_LINK_HTML, BASE)
+        # Only the .pdf link should appear; the .mp3 link must be excluded
+        assert len(result) == 1
+        assert all(url.endswith(".pdf") for url in result.values())
+
+    def test_raw_text_sibling_used_as_label(self):
+        result = extract_pdf_urls(SONG_PAGE_RAW_TEXT_SIBLING_HTML, BASE)
+        assert "Sheet Music" in result
+
+    def test_anchor_text_used_as_fallback_label(self):
+        # When there are no preceding text siblings the anchor's own text is used
+        result = extract_pdf_urls(SONG_PAGE_ANCHOR_LABEL_HTML, BASE)
+        assert "Download Lyrics PDF" in result

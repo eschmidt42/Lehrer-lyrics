@@ -174,3 +174,26 @@ def test_different_dates_may_return_different_songs() -> None:
                 results.add("pigeons")
     # With 2 songs over 28 days both should appear
     assert len(results) == 2
+
+
+# ---------------------------------------------------------------------------
+# Empty songs database — fallback to built-in Christmas Carol
+# ---------------------------------------------------------------------------
+
+
+def test_empty_songs_db_falls_back_to_christmas_carol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When _all_songs() returns no rows the service must fall back to the
+    built-in a-christmas-carol.md file and still return a valid HTML page."""
+    import lehrer_lyrics.service.main as svc
+
+    monkeypatch.setattr(svc, "_all_songs", lambda: [])
+    svc._render_page.cache_clear()
+
+    from lehrer_lyrics.service.main import app
+
+    response = TestClient(app).get("/")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Tom Lehrer" in response.text

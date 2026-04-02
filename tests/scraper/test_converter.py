@@ -229,3 +229,53 @@ def test_polish_lyrics_does_not_retry_on_response_error() -> None:
 
     MockClient.return_value.chat.assert_called_once()
     mock_wait.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# polish_lyrics_with_llm — max_retries=0 (unreachable last_exc path)
+# ---------------------------------------------------------------------------
+
+
+def test_polish_lyrics_raises_when_max_retries_is_zero() -> None:
+    """When max_retries=0 the loop never runs; last_exc is None so the
+    unconditional RequestError at the end of the function must be raised."""
+    with patch("lehrer_lyrics.scraper.converter.ollama.Client"):
+        with pytest.raises(ollama.RequestError, match="0 attempts"):
+            polish_lyrics_with_llm("raw text", "model:7b", max_retries=0)
+
+
+# ---------------------------------------------------------------------------
+# pdf_to_markdown — wrapper wires extract + polish correctly
+# ---------------------------------------------------------------------------
+
+
+def test_pdf_to_markdown_returns_polished_lyrics(tmp_path: Path) -> None:
+    from lehrer_lyrics.scraper.converter import pdf_to_markdown
+
+    fake_pdf = tmp_path / "song.pdf"
+    fake_pdf.write_bytes(b"%PDF fake")
+
+    with (
+        patch(
+            "lehrer_lyrics.scraper.converter.extract_text_from_pdf",
+            return_value="raw lyrics",
+        ) as mock_extract,
+        patch(
+            "lehrer_lyrics.scraper.converter.polish_lyrics_with_llm",
+            return_value="# Song\n\nPolished.\n",
+        ) as mock_polish,
+    ):
+        result = pdf_to_markdown(fake_pdf, "model:7b")
+
+    assert result == "# Song\n\nPolished.\n"
+    mock_extract.assert_called_once_with(fake_pdf)
+    mock_polish.assert_called_once_with(
+        "raw lyrics",
+        "model:7b",
+        timeout=pytest.approx(60.0),
+        max_retries=3,
+        poll_interval=pytest.approx(5.0),
+        ready_timeout=pytest.approx(120.0),
+        host=None,
+        headers=None,
+    )
