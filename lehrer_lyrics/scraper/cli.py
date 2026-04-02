@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
+import sqlite3
 import time
+import zlib
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlparse
@@ -38,12 +41,40 @@ BASE_URL = "https://tomlehrersongs.com"
 SONGS_URL = f"{BASE_URL}/songs/"
 _WINDOW_SIZE = 10
 _CLOUD_HOST = "https://ollama.com"
+_DB_DEFAULT_OUTPUT = Path(__file__).parent.parent / "service" / "songs.db"
 
 
 class _LyricsTask(NamedTuple):
     song_title: str
     pdf_path: Path
     md_stem: str  # filename stem for the output Markdown file (e.g. "alma")
+
+
+def _slugify(text: str) -> str:
+    """Convert a song title to a URL-safe slug (lowercase, hyphens, no punctuation)."""
+    t = text.lower()
+    t = re.sub(r"[^a-z0-9\s-]", "", t)
+    t = re.sub(r"\s+", "-", t.strip())
+    return re.sub(r"-{2,}", "-", t)
+
+
+def _match_title_and_url(
+    md_slug: str,
+    slug_to_title_url: dict[str, tuple[str, str]],
+) -> tuple[str | None, str | None]:
+    """Return (canonical_title, site_url) for a markdown slug, or (None, None).
+
+    Matching strategy:
+    1. Exact slug match.
+    2. Prefix match: the JSON slug starts with ``md_slug + "-"`` (handles verbose
+       JSON titles like "The Elements (incl. …)" vs short file slug "the-elements").
+    """
+    if md_slug in slug_to_title_url:
+        return slug_to_title_url[md_slug]
+    for json_slug, (title, url) in slug_to_title_url.items():
+        if json_slug.startswith(md_slug + "-"):
+            return title, url
+    return None, None
 
 
 app = typer.Typer(help="Scrape Tom Lehrer song pages and collect PDF URLs.")
@@ -418,3 +449,81 @@ def pdf_to_markdown(
     typer.echo(
         f"Converted {converted} PDF(s) to Markdown in {output_dir} ({skipped} skipped)."
     )
+
+
+@app.command()
+def build_db(
+    markdown_dir: Path = typer.Option(
+        Path(".cache/markdown"),
+        help="Directory containing Markdown lyrics files (output of pdf-to-markdown).",
+    ),
+    songs_json: Path = typer.Option(
+        Path("song-urls.json"),
+        help="JSON catalog from the 'scrape' command, used to attach site URLs.",
+    ),
+    output: Path = typer.Option(
+        _DB_DEFAULT_OUTPUT,
+        help="Output path for the SQLite database.",
+    ),
+) -> None:
+    """Build the SQLite lyrics database used by the web service.
+
+    Reads all Markdown files from MARKDOWN_DIR, matches them against the
+    SONGS_JSON catalog to attach canonical titles and site URLs, compresses
+    the lyrics with zlib, and writes them into a compact SQLite database at
+    OUTPUT.  Run this command locally after updating the Markdown cache, then
+    commit the resulting ``songs.db`` so the deployed service can use it.
+    """
+    if not markdown_dir.is_dir():
+        typer.echo(f"Error: markdown directory not found: {markdown_dir}", err=True)
+        raise typer.Exit(code=1)
+
+    slug_to_title_url: dict[str, tuple[str, str]] = {}
+    if songs_json.exists():
+        catalog = SongCatalog.model_validate_json(
+            songs_json.read_text(encoding="utf-8")
+        )
+        for title, entry in catalog.root.items():
+            slug_to_title_url[_slugify(title)] = (title, entry.site)
+    else:
+        typer.echo(
+            f"Warning: {songs_json} not found — site URLs will be NULL.", err=True
+        )
+
+    md_files = sorted(markdown_dir.glob("*.md"))
+    if not md_files:
+        typer.echo(f"Error: no .md files found in {markdown_dir}", err=True)
+        raise typer.Exit(code=1)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(output)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS songs (
+                title     TEXT NOT NULL,
+                slug      TEXT PRIMARY KEY,
+                site_url  TEXT,
+                lyrics_gz BLOB NOT NULL
+            )
+            """
+        )
+        inserted = 0
+        for md_path in md_files:
+            md_slug = md_path.stem
+            canonical_title, site_url = _match_title_and_url(md_slug, slug_to_title_url)
+            title = canonical_title or md_slug.replace("-", " ").title()
+            lyrics_gz = zlib.compress(
+                md_path.read_text(encoding="utf-8").encode("utf-8"), level=9
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO songs (title, slug, site_url, lyrics_gz)"
+                " VALUES (?, ?, ?, ?)",
+                (title, md_slug, site_url, lyrics_gz),
+            )
+            inserted += 1
+        conn.commit()
+    finally:
+        conn.close()
+
+    typer.echo(f"Built {output} with {inserted} song(s).")

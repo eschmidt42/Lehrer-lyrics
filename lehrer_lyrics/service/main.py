@@ -1,4 +1,12 @@
+from __future__ import annotations
+
+import random
+import sqlite3
+import zlib
+from datetime import date, datetime
+from functools import lru_cache
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import markdown
 from fastapi import FastAPI
@@ -18,7 +26,8 @@ from fasthtml.common import (
 )
 
 _SERVICE_DIR = Path(__file__).parent
-_SONGS_DIR = _SERVICE_DIR / "songs"
+_DB_PATH = _SERVICE_DIR / "songs.db"
+_BERLIN = ZoneInfo("Europe/Berlin")
 _PICO_CSS = Link(
     rel="stylesheet",
     href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css",
@@ -26,38 +35,55 @@ _PICO_CSS = Link(
 _LOCAL_CSS = Link(rel="stylesheet", href="/static/style.css")
 
 
-def _render_song(path: Path) -> str:
-    """Read a markdown song file and return rendered HTML string."""
-    return markdown.markdown(path.read_text(encoding="utf-8"), extensions=["nl2br"])
+def _today_berlin() -> date:
+    return datetime.now(_BERLIN).date()
 
 
-# Rendered once at startup — no per-request overhead
-_CHRISTMAS_CAROL_HTML = _render_song(_SONGS_DIR / "a-christmas-carol.md")
+@lru_cache(maxsize=None)
+def _all_songs() -> list[tuple[str, str | None, bytes]]:
+    """Load all songs from songs.db once; returns (title, site_url, lyrics_gz) tuples."""
+    with sqlite3.connect(_DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT title, site_url, lyrics_gz FROM songs ORDER BY slug"
+        ).fetchall()
+    return [(title, site_url, bytes(lyrics_gz)) for title, site_url, lyrics_gz in rows]
 
-_PAGE = to_xml(
-    Html(
-        Head(
-            Meta(charset="utf-8"),
-            Meta(name="viewport", content="width=device-width, initial-scale=1"),
-            _PICO_CSS,
-            _LOCAL_CSS,
-            Title("A Christmas Carol — Tom Lehrer"),
-        ),
-        Body(
-            Main(
-                NotStr(_CHRISTMAS_CAROL_HTML),
-                cls="container",
-            ),
-            Footer(
-                NotStr(
-                    "By Tom Lehrer &mdash; <em>Going from adolescence to senility, trying to bypass maturity</em>"
-                ),
-                cls="container",
-            ),
-        ),
-        lang="en",
+
+@lru_cache(maxsize=1)
+def _render_page(today: date) -> str:
+    """Render the HTML page for the daily song.
+
+    ``lru_cache(maxsize=1)`` keeps exactly one entry keyed by ``today``.
+    When the date rolls over the cache naturally misses and recomputes.
+    """
+    songs = _all_songs()
+    random.seed(today.isoformat())
+    title, site_url, lyrics_gz = random.choice(songs)
+    lyrics_html = markdown.markdown(
+        zlib.decompress(lyrics_gz).decode("utf-8"), extensions=["nl2br"]
     )
-)
+    footer_inner = (
+        f'By Tom Lehrer &mdash; <a href="{site_url}">tomlehrersongs.com</a>'
+        if site_url
+        else "By Tom Lehrer"
+    )
+    return to_xml(
+        Html(
+            Head(
+                Meta(charset="utf-8"),
+                Meta(name="viewport", content="width=device-width, initial-scale=1"),
+                _PICO_CSS,
+                _LOCAL_CSS,
+                Title(f"{title} — Tom Lehrer"),
+            ),
+            Body(
+                Main(NotStr(lyrics_html), cls="container"),
+                Footer(NotStr(footer_inner), cls="container"),
+            ),
+            lang="en",
+        )
+    )
+
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=_SERVICE_DIR), name="static")
@@ -65,4 +91,4 @@ app.mount("/static", StaticFiles(directory=_SERVICE_DIR), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
-    return HTMLResponse(content=_PAGE)
+    return HTMLResponse(content=_render_page(_today_berlin()))
