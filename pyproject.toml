@@ -21,6 +21,7 @@ entrypoint = "lehrer_lyrics.service.main:app"
 [dependency-groups]
 dev = [
     "beautifulsoup4>=4.14.3",
+    "notebook>=7.5.5",
     "ollama>=0.6.1",
     "pypdf>=6.9.2",
     "pytest>=9.0.2",
