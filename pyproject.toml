@@ -11,6 +11,9 @@ dependencies = [
 requires = ["uv_build>=0.11.3,<0.12"]
 build-backend = "uv_build"
 
+[project.scripts]
+lehrer-scrape = "lehrer_lyrics.scraper.cli:app"
+
 [tool.fastapi]
 entrypoint = "lehrer_lyrics.service.main:app"
 
@@ -20,6 +23,7 @@ dev = [
     "pytest>=9.0.2",
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.8.0",
+    "rich>=14.3.3",
     "ruff>=0.15.8",
     "ty>=0.0.27",
     "typer>=0.24.1",
