@@ -1,12 +1,13 @@
 # Scraper CLI — `lehrer-scrape`
 
-Dev-only CLI with three commands that form a pipeline:
+Dev-only CLI with four commands that form a pipeline:
 
 - **`scrape`** — scrapes [tomlehrersongs.com/songs](https://tomlehrersongs.com/songs/), caches HTML locally, and writes a JSON file mapping each song to its PDF URL(s).
 - **`download-pdfs`** — downloads all PDFs listed in that JSON to a local cache.
 - **`pdf-to-markdown`** — reads cached lyrics PDFs, extracts text, and calls an Ollama LLM to produce clean Markdown files.
+- **`build-db`** — compresses the Markdown lyrics and writes them into the SQLite database (`lehrer_lyrics/service/songs.db`) consumed by the web service.
 
-Source: `src/lehrer_lyrics/scraper/`
+Source: `lehrer_lyrics/scraper/`
 
 ---
 
@@ -139,6 +140,52 @@ uv run lehrer-scrape pdf-to-markdown --cloud --model mistral-small:latest
 3. If all retries fail, prints a warning and skips that song.
 
 `ResponseError` (model / request error) is never retried — it warns and skips immediately.
+
+---
+
+### `build-db`
+
+Reads Markdown files produced by `pdf-to-markdown`, matches each against the JSON catalog to attach canonical titles and site URLs, compresses the lyrics with zlib, and writes a compact SQLite database consumed by the web service.
+
+Run this locally after updating the Markdown cache, then commit the resulting `lehrer_lyrics/service/songs.db`.
+
+```bash
+uv run lehrer-scrape build-db [OPTIONS]
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `--markdown-dir PATH` | `.cache/markdown` | Directory containing Markdown lyrics files (output of `pdf-to-markdown`) |
+| `--songs-json PATH` | `song-urls.json` | JSON catalog from the `scrape` command, used to attach canonical titles and site URLs |
+| `--output PATH` | `lehrer_lyrics/service/songs.db` | Output path for the SQLite database |
+
+**Build the database** (reads `.cache/markdown/` and `song-urls.json`):
+
+```bash
+uv run lehrer-scrape build-db
+```
+
+**Custom paths**:
+
+```bash
+uv run lehrer-scrape build-db \
+    --markdown-dir /path/to/markdown \
+    --songs-json my-catalog.json \
+    --output /tmp/songs.db
+```
+
+The database schema is:
+
+```sql
+CREATE TABLE songs (
+    title     TEXT NOT NULL,
+    slug      TEXT PRIMARY KEY,
+    site_url  TEXT,
+    lyrics_gz BLOB NOT NULL
+);
+```
+
+Title matching uses the slugified song title. If a Markdown file stem matches a JSON entry exactly, or if the JSON slug starts with the file stem followed by `"-"` (e.g. `"the-elements"` matches `"the-elements-incl-aristotle"`), the canonical title and site URL are used. Unmatched files fall back to a title derived from the filename.
 
 ---
 
