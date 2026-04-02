@@ -3,10 +3,24 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
-from urllib.parse import urlparse
 
 import typer
+from rich.console import Group
+from rich.live import Live
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TaskID,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
+from rich.spinner import Spinner
+from rich.table import Table
+from rich.text import Text
 
 from lehrer_lyrics.scraper.fetcher import fetch_page
 from lehrer_lyrics.scraper.parser import (
@@ -17,8 +31,47 @@ from lehrer_lyrics.scraper.parser import (
 
 BASE_URL = "https://tomlehrersongs.com"
 SONGS_URL = f"{BASE_URL}/songs/"
+_WINDOW_SIZE = 10
 
 app = typer.Typer(help="Scrape Tom Lehrer song pages and collect PDF URLs.")
+
+
+class _LiveDisplay:
+    """Live-renderable combining a rolling song window with an overall progress bar.
+
+    The rolling window shows the last ``_WINDOW_SIZE`` songs:
+    - spinner  — the song currently being fetched
+    - ✓ (green) — songs already processed
+
+    A progress bar below shows overall N/total, time elapsed, and ETA.
+    """
+
+    def __init__(self, progress: Progress) -> None:
+        self.progress = progress
+        self._spinner = Spinner("dots")
+        self._window: list[tuple[str, bool]] = []  # (title, is_done)
+
+    def set_current(self, title: str) -> None:
+        """Add a new in-progress entry, evicting the oldest if the window is full."""
+        if len(self._window) >= _WINDOW_SIZE:
+            self._window.pop(0)
+        self._window.append((title, False))
+
+    def mark_done(self, title: str) -> None:
+        """Mark the last entry as done, updating its title if needed."""
+        if self._window:
+            self._window[-1] = (title, True)
+
+    def __rich__(self) -> Group:
+        table = Table.grid(padding=(0, 1))
+        for song_title, done in self._window:
+            icon = (
+                Text("✓", style="bold green")
+                if done
+                else self._spinner.render(time.monotonic())
+            )
+            table.add_row(icon, song_title)
+        return Group(table, self.progress)
 
 
 @app.command()
@@ -55,25 +108,35 @@ def scrape(
         typer.echo("No song links found on the main page. Aborting.", err=True)
         raise typer.Exit(code=1)
 
-    typer.echo(f"Found {len(song_links)} song links. Fetching individual pages…")
-
     results: dict[str, dict[str, str]] = {}
 
-    for _link_title, song_url in song_links:
-        slug = urlparse(song_url).path.strip("/")
-        typer.echo(f"  {slug}")
+    progress = Progress(
+        TextColumn("[bold blue]Songs"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    )
+    display = _LiveDisplay(progress)
+    task_id: TaskID = progress.add_task("scraping", total=len(song_links))
 
-        song_html = fetch_page(
-            song_url, cache_dir, delay, force, _last_request_time=last_request_time
-        )
+    with Live(display, refresh_per_second=10):
+        for link_title, song_url in song_links:
+            display.set_current(link_title)
 
-        title = extract_song_title(song_html) or _link_title
-        pdf_urls = extract_pdf_urls(song_html, BASE_URL)
+            song_html = fetch_page(
+                song_url, cache_dir, delay, force, _last_request_time=last_request_time
+            )
 
-        results[title] = {"site": song_url, **pdf_urls}
+            title = extract_song_title(song_html) or link_title
+            pdf_urls = extract_pdf_urls(song_html, BASE_URL)
+            results[title] = {"site": song_url, **pdf_urls}
+
+            display.mark_done(title)
+            progress.advance(task_id)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    typer.echo(f"\nWrote {len(results)} entries to {output}")
+    typer.echo(f"Wrote {len(results)} entries to {output}")
