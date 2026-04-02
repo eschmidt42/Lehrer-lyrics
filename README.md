@@ -12,3 +12,15 @@
 [![prek](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/j178/prek/master/docs/assets/badge-v0.json)](https://github.com/j178/prek)
 
 A project created with [FastAPI cloud](https://fastapicloud.com) CLI -> [docs](./docs/fastapi-cloud.md).
+
+## HTML collector
+
+A dev-only CLI that scrapes [tomlehrersongs.com/songs](https://tomlehrersongs.com/songs/), caches HTML locally, and writes a JSON file mapping each song to its PDF URL(s).
+
+```bash
+uv sync --group dev
+uv run lehrer-scrape            # fetch all ~90 song pages (2 s delay between requests)
+uv run lehrer-scrape --force    # re-fetch even if cached
+```
+
+See [docs/lehrer-scrape.md](./docs/lehrer-scrape.md) for full CLI and module documentation.

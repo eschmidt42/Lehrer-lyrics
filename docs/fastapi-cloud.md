@@ -19,11 +19,6 @@ uv run fastapi login
 uv run fastapi deploy
 ```
 
-## Project Structure
-
-- `main.py` - Your FastAPI application
-- `pyproject.toml` - Project dependencies
-
 ## Learn More
 
 - [FastAPI Documentation](https://fastapi.tiangolo.com)
