@@ -8,15 +8,6 @@ from pathlib import Path
 import ollama
 import pypdf
 
-# _SYSTEM_PROMPT = """You are a lyrics formatting assistant.
-
-# Given raw text extracted from a PDF, return only the song lyrics in clean Markdown.
-
-# Use a level-1 heading for the song title, separate stanzas with a blank line, and do not include any commentary, notes, or extra text.
-
-# Use the following structure:
-# """
-
 _SYSTEM_PROMPT = """Convert the following lyrics extracted from a PDF into clean Markdown.
 
 Please:
@@ -85,8 +76,6 @@ def wait_for_ollama_ready(
 
 def build_messages(raw_text: str) -> list[dict[str, str]]:
     return [
-        # {"role": "system", "content": _SYSTEM_PROMPT},
-        # {"role": "user", "content": f"Text: {raw_text}"},
         {
             "role": "user",
             "content": f"""Convert the following Tom Lehrer lyrics extracted from a PDF into clean Markdown.
